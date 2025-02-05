@@ -2,49 +2,39 @@ import pandas as pd
 import dash
 from dash import dcc, html, Input, Output
 import plotly.express as px
+import requests
+from io import BytesIO
 
-# 🔗 Link do Google Sheets (versão CSV exportável)
-google_sheets_link = "https://docs.google.com/spreadsheets/d/1B_vqtjzVjBEyTaG4Ng2onq_SLIWccIVi/gviz/tq?tqx=out:csv&sheet=Service"
-google_sheets_sales = "https://docs.google.com/spreadsheets/d/1B_vqtjzVjBEyTaG4Ng2onq_SLIWccIVi/gviz/tq?tqx=out:csv&sheet=Sales"
+# 🛠 **PASSO 1: Baixar e carregar os dados do Google Sheets**
+sheet_url = "https://docs.google.com/spreadsheets/d/1B_vqtjzVjBEyTaG4Ng2onq_SLIWccIVi/export?format=xlsx"
 
-# 🔄 Carregar os dados diretamente do Google Sheets
-sales_df = pd.read_csv(google_sheets_sales, dtype=str)
-service_df = pd.read_csv(google_sheets_link, dtype=str)
+response = requests.get(sheet_url)
+if response.status_code == 200:
+    xls = pd.ExcelFile(BytesIO(response.content))
+    sales_df = pd.read_excel(xls, sheet_name="Sales")
+    service_df = pd.read_excel(xls, sheet_name="Service")
+else:
+    raise Exception("Erro ao baixar o arquivo do Google Sheets.")
 
-# ✅ Verifica se a coluna "Service Advisor" existe antes de renomear
-if "Service Advisor" in service_df.columns:
-    service_df.rename(columns={"Service Advisor": "Advisor"}, inplace=True)
-
-# ✅ Verifica se a coluna "Sales Consultant" existe antes de renomear
-if "Sales Consultant" in sales_df.columns:
-    sales_df.rename(columns={"Sales Consultant": "Consultant"}, inplace=True)
-
-# 🔄 Conversão da data sem definir formato fixo
+# **PASSO 2: Ajustar a conversão de data**
 sales_df["Recorded Date"] = pd.to_datetime(sales_df["Recorded Date"], errors="coerce")
 service_df["Recorded Date"] = pd.to_datetime(service_df["Recorded Date"], errors="coerce")
 
-# ✅ Renomeia a coluna de data
-sales_df.rename(columns={"Recorded Date": "Date"}, inplace=True)
-service_df.rename(columns={"Recorded Date": "Date"}, inplace=True)
+# **PASSO 3: Renomear colunas para facilitar no Dash**
+sales_df.rename(columns={"Recorded Date": "Date", "Sales Consultant": "Consultant", "Question Summary": "Question"}, inplace=True)
+service_df.rename(columns={"Recorded Date": "Date", "Service Advisor": "Advisor", "Question Summary": "Question"}, inplace=True)
 
-# ✅ Adiciona colunas de ano e mês
+# **PASSO 4: Adicionar colunas auxiliares**
 sales_df["Year"] = sales_df["Date"].dt.year
 sales_df["Month"] = sales_df["Date"].dt.month
-
 service_df["Year"] = service_df["Date"].dt.year
 service_df["Month"] = service_df["Date"].dt.month
 
-# ✅ Converter Score para número removendo vírgulas, espaços e % (caso existam)
-def clean_score(df, column):
-    if column in df.columns:
-        df[column] = df[column].str.replace("%", "").str.replace(",", ".").str.strip()
-        df[column] = pd.to_numeric(df[column], errors="coerce")  # Converte para float
-    return df
+# **PASSO 5: Converter Score para numérico**
+sales_df["Score"] = sales_df["Score"].astype(str).str.replace("%", "").str.replace(",", ".").astype(float)
+service_df["Score"] = service_df["Score"].astype(str).str.replace("%", "").str.replace(",", ".").astype(float)
 
-sales_df = clean_score(sales_df, "Score")
-service_df = clean_score(service_df, "Score")
-
-# ✅ Função para definir cor com base no Score
+# **PASSO 6: Definir função para cor**
 def define_color(score):
     if score < 90:
         return "red"
@@ -53,14 +43,15 @@ def define_color(score):
     else:
         return "green"
 
-# 🚀 Criar aplicação Dash
+# **PASSO 7: Criar aplicação Dash**
 app = dash.Dash(__name__)
+server = app.server  # Necessário para Gunicorn
 
-# 📊 Layout do dashboard
+# **PASSO 8: Layout do dashboard**
 app.layout = html.Div([
     html.H1("CXI Performance Dashboard", style={"text-align": "center"}),
 
-    # 🔎 Filtros
+    # Filtros
     html.Div([
         html.Label("Select Year:"),
         dcc.Dropdown(
@@ -93,7 +84,7 @@ app.layout = html.Div([
         ),
     ], style={"width": "30%", "display": "inline-block", "padding": "10px"}),
 
-    # 📈 Indicadores de Score
+    # Indicadores de Score
     html.Div([
         html.Div([
             html.H3("Sales Performance Score"),
@@ -106,22 +97,14 @@ app.layout = html.Div([
         ], style={"width": "45%", "display": "inline-block", "text-align": "center", "border": "1px solid black", "padding": "20px"}),
     ], style={"display": "flex", "justify-content": "space-around", "margin-top": "20px"}),
 
-    # 📌 Legenda de cores
-    html.Div([
-        html.H3("Score Color Legend"),
-        html.P("🔴 Red: 0% to 89.99%"),
-        html.P("🟡 Yellow: 90% to 92.99%"),
-        html.P("🟢 Green: 93% to 100%"),
-    ], style={"margin-top": "20px", "padding": "10px", "border": "1px solid black"}),
-
-    # 📊 Gráficos
+    # Gráficos
     dcc.Graph(id="sales_score_chart"),
     dcc.Graph(id="service_score_chart"),
     dcc.Graph(id="sales_question_chart"),
     dcc.Graph(id="service_question_chart"),
 ])
 
-# 🔄 Callback para atualizar os indicadores e gráficos
+# **PASSO 9: Callback para atualizar os gráficos**
 @app.callback(
     [Output("sales_score", "children"),
      Output("service_score", "children"),
@@ -135,7 +118,6 @@ app.layout = html.Div([
      Input("service_advisor_filter", "value")]
 )
 def update_charts(selected_year, selected_month, selected_sales, selected_service):
-    # 📊 Filtrando os dados com base nas seleções do usuário
     filtered_sales = sales_df[sales_df["Year"] == selected_year]
     filtered_service = service_df[service_df["Year"] == selected_year]
 
@@ -149,12 +131,14 @@ def update_charts(selected_year, selected_month, selected_sales, selected_servic
     if selected_service:
         filtered_service = filtered_service[filtered_service["Advisor"].isin(selected_service)]
 
-    # 📊 Criar gráficos
-    sales_fig = px.bar(filtered_sales, x="Consultant", y="Score", title="Sales Score")
-    service_fig = px.bar(filtered_service, x="Advisor", y="Score", title="Service Score")
+    avg_sales_score = filtered_sales["Score"].mean() if not filtered_sales.empty else 0
+    avg_service_score = filtered_service["Score"].mean() if not filtered_service.empty else 0
 
-    return f"{filtered_sales['Score'].mean():.2f}%", f"{filtered_service['Score'].mean():.2f}%", sales_fig, service_fig, px.bar(), px.bar()
+    sales_score_display = f"{avg_sales_score:.2f}%" if avg_sales_score > 0 else "No Data"
+    service_score_display = f"{avg_service_score:.2f}%" if avg_service_score > 0 else "No Data"
 
-# 🚀 Rodar o app
+    return sales_score_display, service_score_display, px.bar(), px.bar(), px.bar(), px.bar()
+
+# **PASSO 10: Rodar o app com compatibilidade para Gunicorn**
 if __name__ == "__main__":
-   app.run_server(debug=True, host="0.0.0.0", port=8050)
+    app.run_server(debug=True, host="0.0.0.0", port=8050)
